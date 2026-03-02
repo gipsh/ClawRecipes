@@ -24,6 +24,7 @@ What it writes:
 
 Default tool policy (recipe-defined):
 - allows: `group:fs`, `group:web`, plus `cron` and `message`
+  - Note: `cron` here refers to Gateway `cron.*` capabilities / tool policy, not a `tools.cron` config key in `openclaw.json`.
 - denies: `exec`
 
 ## 2) `social-team` (team)

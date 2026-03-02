@@ -79,6 +79,10 @@ The plugin supports these config keys (with defaults):
 - `confirmAutoInstall` (default: `true`)
 - `cronInstallation` (default: `prompt`; values: `off|prompt|on`)
 
+Cron note:
+- You do **not** enable cron via `tools.cron` in `openclaw.json` (that key is not part of the config schema).
+- ClawRecipes reconciles recipe cron jobs via the Gateway `cron.*` RPC surface when available; otherwise it **warns and skips** (scaffold/team creation must still succeed).
+
 Config schema is defined in `openclaw.plugin.json`.
 
 ## Documentation
