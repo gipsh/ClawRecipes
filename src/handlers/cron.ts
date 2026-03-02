@@ -164,26 +164,51 @@ function isCronToolUnavailableError(err: unknown): boolean {
 type CronAddResponse = { id?: string; job?: { id?: string } } | null;
 
 async function cronAdd(api: OpenClawPluginApi, job: Record<string, unknown>): Promise<CronAddResponse> {
-  // Map internal job payload to CLI flags.
   const argv: string[] = ["openclaw", "cron", "add", "--json"];
-  for (const [k, v] of Object.entries(job)) {
-    if (v === undefined || v === null || v === "") continue;
-    if (k === "name") argv.push("--name", String(v));
-    else if (k === "description") argv.push("--description", String(v));
-    else if (k === "cron") argv.push("--cron", String(v));
-    else if (k === "every") argv.push("--every", String(v));
-    else if (k === "at") argv.push("--at", String(v));
-    else if (k === "tz") argv.push("--tz", String(v));
-    else if (k === "agentId" || k === "agent") argv.push("--agent", String(v));
-    else if (k === "message") argv.push("--message", String(v));
-    else if (k === "systemEvent") argv.push("--system-event", String(v));
-    else if (k === "channel") argv.push("--channel", String(v));
-    else if (k === "to") argv.push("--to", String(v));
-    else if (k === "announce") {
-      if (v) argv.push("--announce");
-    } else if (k === "enabled") {
-      if (v === false) argv.push("--disabled");
+
+  // name/description
+  if (typeof (job as any).name === "string" && (job as any).name.trim()) argv.push("--name", (job as any).name.trim());
+  if (typeof (job as any).description === "string" && (job as any).description.trim())
+    argv.push("--description", (job as any).description.trim());
+
+  // schedule: require exactly one of --cron/--every/--at
+  const schedule = (job as { schedule?: any }).schedule;
+  if (schedule && typeof schedule === "object") {
+    const kind = String(schedule.kind ?? "");
+    if (kind === "cron") {
+      argv.push("--cron", String(schedule.expr ?? ""));
+      if (schedule.tz) argv.push("--tz", String(schedule.tz));
+    } else if (kind === "every") {
+      argv.push("--every", String(schedule.every ?? ""));
+    } else if (kind === "at") {
+      argv.push("--at", String(schedule.at ?? ""));
     }
+  }
+
+  // enabled
+  if ((job as any).enabled === false) argv.push("--disabled");
+
+  // agentId + sessionTarget
+  if (typeof (job as any).agentId === "string" && (job as any).agentId.trim())
+    argv.push("--agent", String((job as any).agentId).trim());
+  const sessionTarget = (job as any).sessionTarget;
+  if (sessionTarget === "main" || sessionTarget === "isolated") argv.push("--session", sessionTarget);
+
+  // payload
+  const payload = (job as any).payload;
+  if (payload && typeof payload === "object") {
+    const pk = String(payload.kind ?? "");
+    if (pk === "agentTurn" && payload.message) argv.push("--message", String(payload.message));
+    if (pk === "systemEvent" && payload.text) argv.push("--system-event", String(payload.text));
+  }
+
+  // delivery
+  const delivery = (job as any).delivery;
+  if (delivery && typeof delivery === "object" && String(delivery.mode ?? "") === "announce") {
+    argv.push("--announce");
+    if (delivery.channel) argv.push("--channel", String(delivery.channel));
+    if (delivery.to) argv.push("--to", String(delivery.to));
+    if (delivery.bestEffort) argv.push("--best-effort-deliver");
   }
 
   const result = await api.runtime.system.runCommandWithTimeout(argv, { timeoutMs: 30_000 });
@@ -192,6 +217,7 @@ async function cronAdd(api: OpenClawPluginApi, job: Record<string, unknown>): Pr
   }
   return (result.stdout ? (JSON.parse(result.stdout) as CronAddResponse) : null) ?? null;
 }
+
 
 async function cronUpdate(api: OpenClawPluginApi, jobId: string, patch: CronJobPatch) {
   const argv: string[] = ["openclaw", "cron", "edit", jobId];
