@@ -376,6 +376,7 @@ export async function reconcileRecipeCronJobs(opts: {
   const desiredIds = new Set(desired.map((j) => j.id));
   const results: CronReconcileResult[] = [];
 
+  try {
   await reconcileDesiredCronJobs({
     ...opts,
     desired,
@@ -396,6 +397,13 @@ export async function reconcileRecipeCronJobs(opts: {
     results,
   });
   await writeJsonFile(statePath, state);
+  } catch (err) {
+    if (isCronToolUnavailableError(err)) {
+      console.error('[recipes] note: cron tool unavailable; skipping cron reconciliation (scaffold will proceed).');
+      return { ok: true as const, changed: false as const, note: "cron-tool-unavailable" as const, desiredCount: desired.length };
+    }
+    throw err;
+  }
 
   const changed = results.some(
     (r) => r.action === "created" || r.action === "updated" || r.action?.startsWith("disabled")
