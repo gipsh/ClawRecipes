@@ -178,6 +178,12 @@ Agents are just folders under:
 - standalone: `~/.openclaw/workspace-<agentId>/`
 - team roles: `~/.openclaw/workspace-<teamId>/roles/<role>/`
 
+**CWD note (teams):** Role agents may start in `roles/<role>/`. If your commands rely on team-root-relative paths like `work/` or `notes/`, first `cd` to the team root. Default team recipes include `scripts/team-root.sh` which prints the team root from any subdir, so you can run:
+
+```bash
+cd "$(bash ../../scripts/team-root.sh 2>/dev/null || bash ./scripts/team-root.sh)"
+```
+
 Common files:
 - `SOUL.md` — the persona / operating style
 - `AGENTS.md` — operating instructions / workflow
