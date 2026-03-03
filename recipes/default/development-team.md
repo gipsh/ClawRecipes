@@ -9,14 +9,32 @@ cronJobs:
     name: "Lead triage loop"
     schedule: "*/30 7-23 * * 1-5"
     timezone: "America/New_York"
-    message: "Automated lead triage loop: triage inbox/tickets, assign work, and update notes/status.md. Anti-stuck: if lowest in-progress is HARD BLOCKED, advance the next unblocked ticket (or pull from backlog). If in-progress is stale (>12h no dated update), comment or move it back. Guardrail: run ./scripts/ticket-hygiene.sh each loop; if it fails, fix lane/status/owner mismatches before proceeding (assignment stubs are deprecated)."
+    message: |
+      Automated lead triage loop: triage inbox/tickets, assign work, and update notes/status.md.
+
+      CWD guardrail (team root): run:
+        cd "$(bash ../../scripts/team-root.sh 2>/dev/null || bash ./scripts/team-root.sh)"
+      before any relative-path commands (e.g. work/, notes/, scripts/).
+
+      Anti-stuck: if lowest in-progress is HARD BLOCKED, advance the next unblocked ticket (or pull from backlog).
+      If in-progress is stale (>12h no dated update), comment or move it back.
+      Guardrail: run ./scripts/ticket-hygiene.sh each loop; if it fails, fix lane/status/owner mismatches before proceeding (assignment stubs are deprecated).
+
     enabledByDefault: true
 
   - id: execution-loop
     name: "Execution loop"
     schedule: "*/30 7-23 * * 1-5"
     timezone: "America/New_York"
-    message: "Automated execution loop: make progress on in-progress tickets, keep changes small/safe, and update notes/status.md. Guardrail: run ./scripts/ticket-hygiene-dev.sh each loop; if it fails, fix lane/status/owner mismatches before proceeding (assignment stubs are deprecated)."
+    message: |
+      Automated execution loop: make progress on in-progress tickets, keep changes small/safe, and update notes/status.md.
+
+      CWD guardrail (team root): run:
+        cd "$(bash ../../scripts/team-root.sh 2>/dev/null || bash ./scripts/team-root.sh)"
+      before any relative-path commands (e.g. work/, notes/, scripts/).
+
+      Guardrail: run ./scripts/ticket-hygiene-dev.sh each loop; if it fails, fix lane/status/owner mismatches before proceeding (assignment stubs are deprecated).
+
     enabledByDefault: false
 
   - id: pr-watcher
@@ -81,6 +99,28 @@ templates:
       },
       "defaultLane": "in-progress"
     }
+
+
+  sharedContext.teamRootScript: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Team root resolver
+    # Prints the absolute path to the team workspace root from any subdir (e.g. roles/<role>/).
+    # Heuristic: find the nearest ancestor containing work/, roles/, and shared-context/.
+
+    d="$(pwd -P)"
+    while true; do
+      if [[ -d "$d/work" && -d "$d/roles" && -d "$d/shared-context" ]]; then
+        echo "$d"
+        exit 0
+      fi
+      if [[ "$d" == "/" ]]; then
+        echo "team-root.sh: could not find team root from $(pwd -P)" >&2
+        exit 1
+      fi
+      d="$(dirname "$d")"
+    done
 
   lead.ticketHygiene: |
     #!/usr/bin/env bash
@@ -935,6 +975,8 @@ files:
   # Automation / hygiene scripts
   # NOTE: portable policy: we do NOT chmod automatically. After scaffold:
   #   chmod +x scripts/*.sh
+  - path: scripts/team-root.sh
+    template: sharedContext.teamRootScript
   - path: scripts/ticket-hygiene.sh
     template: ticketHygiene
     mode: createOnly
