@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import path from "node:path";
+import fs from "node:fs/promises";
 import JSON5 from "json5";
 import {
   applyAgentSnippetsToOpenClawConfig,
@@ -44,13 +45,21 @@ import {
 } from "./src/handlers/team";
 import { handleScaffold, scaffoldAgentFromRecipe } from "./src/handlers/scaffold";
 import { reconcileRecipeCronJobs } from "./src/handlers/cron";
-import { handleWorkflowsApprove, handleWorkflowsPollApprovals, handleWorkflowsResume, handleWorkflowsRun, handleWorkflowsRunnerOnce, handleWorkflowsRunnerTick } from "./src/handlers/workflows";
+import { handleWorkflowsApprove, handleWorkflowsPollApprovals, handleWorkflowsResume, handleWorkflowsRun, handleWorkflowsRunnerOnce, handleWorkflowsRunnerTick, handleWorkflowsWorkerTick } from "./src/handlers/workflows";
 import { listRecipeFiles, loadRecipeById, workspacePath } from "./src/lib/recipes";
 import {
   executeWorkspaceCleanup,
   planWorkspaceCleanup,
 } from "./src/lib/cleanup-workspaces";
 import { resolveWorkspaceRoot } from "./src/lib/workspace";
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function asString(v: unknown, fallback = ''): string {
+  return typeof v === 'string' ? v : (v == null ? fallback : String(v));
+}
 
 const recipesPlugin = {
   id: "recipes",
@@ -62,6 +71,81 @@ const recipesPlugin = {
     properties: {},
   },
   register(api: OpenClawPluginApi) {
+    // Auto-approval via chat reply (MVP):
+    // If a human replies `approve <runId>` or `decline <runId>` in the bound channel,
+    // record the decision and resume the run.
+    api.on(
+      "message_received" as never,
+      async (evt: unknown) => {
+        try {
+          const e = isRecord(evt) ? evt : {};
+          const channel = asString(e["messageProvider"] ?? e["channelId"] ?? e["channel"]);
+          const text = asString(e["text"] ?? e["message"] ?? e["body"]).trim();
+          if (!text) return;
+
+          // Only enable for Telegram for now (matches RJ's request).
+          if (channel !== "telegram") return;
+
+          const m = text.match(/^(approve|decline)\s+([A-Z0-9]{4,8})\s*$/i);
+          if (!m) return;
+          const verb = String(m[1] ?? "").toLowerCase();
+          const code = String(m[2] ?? "").toUpperCase();
+          const approved = verb === "approve";
+
+          const workspaceRoot = resolveWorkspaceRoot(api);
+          const parent = path.resolve(workspaceRoot, "..");
+
+          // Scan workspace-*/shared-context/workflow-runs/*/approvals/approval.json for a matching code.
+          const teamDirs = (await fs.readdir(parent, { withFileTypes: true }))
+            .filter((d) => d.isDirectory() && d.name.startsWith("workspace-"))
+            .map((d) => path.join(parent, d.name));
+
+          let found: { teamId: string; runId: string } | null = null;
+
+          for (const teamDir of teamDirs) {
+            const teamId = path.basename(teamDir).replace(/^workspace-/, "");
+            const runsDir = path.join(teamDir, "shared-context", "workflow-runs");
+            let runIds: string[] = [];
+            try {
+              runIds = (await fs.readdir(runsDir, { withFileTypes: true }))
+                .filter((d) => d.isDirectory())
+                .map((d) => d.name);
+            } catch {
+              continue;
+            }
+
+            for (const runId of runIds) {
+              const approvalPath = path.join(runsDir, runId, "approvals", "approval.json");
+              try {
+                const raw = await fs.readFile(approvalPath, "utf8");
+                const a = JSON.parse(raw) as { code?: string; status?: string; runId?: string; teamId?: string };
+                if (String(a?.code ?? "").toUpperCase() === code && String(a?.status ?? "") === "pending") {
+                  found = { teamId: String(a?.teamId ?? teamId), runId: String(a?.runId ?? runId) };
+                  break;
+                }
+              } catch {
+                // ignore
+              }
+            }
+            if (found) break;
+          }
+
+          if (!found) return;
+
+          await handleWorkflowsApprove(api, { teamId: found.teamId, runId: found.runId, approved, note: `Approved via Telegram (${code})` });
+          // Resume is best-effort: the worker may have already flipped the run status.
+          try {
+            await handleWorkflowsResume(api, { teamId: found.teamId, runId: found.runId });
+          } catch {
+            // ignore
+          }
+        } catch (e) {
+          console.error(`[recipes] approval reply handler error: ${(e as Error).message}`);
+        }
+      },
+      { priority: 50 } as unknown as { priority: number }
+    );
+
     // On plugin load, ensure multi-agent config has an explicit agents.list with main at top.
     // This is idempotent and only writes if a change is required.
     (async () => {
@@ -490,6 +574,23 @@ const recipesPlugin = {
               teamId: String(options.teamId ?? ""),
               concurrency: typeof options.concurrency === "number" ? options.concurrency : undefined,
               leaseSeconds: typeof options.leaseSeconds === "number" ? options.leaseSeconds : undefined,
+            });
+            console.log(JSON.stringify(res, null, 2));
+          });
+
+        workflows
+          .command("worker-tick")
+          .description("Dequeue and execute up to N per-agent workflow tasks (pull-based worker)")
+          .requiredOption("--team-id <teamId>", "Team id (workspace-<teamId>)")
+          .requiredOption("--agent-id <agentId>", "Agent id (queue file name under shared-context/workflow-queues)")
+          .option("--limit <n>", "Max tasks to execute", (v: string) => Number(v))
+          .option("--worker-id <id>", "Worker id (for claim/lock attribution)")
+          .action(async (options: { teamId?: string; agentId?: string; limit?: number; workerId?: string }) => {
+            const res = await handleWorkflowsWorkerTick(api, {
+              teamId: String(options.teamId ?? ""),
+              agentId: String(options.agentId ?? ""),
+              limit: typeof options.limit === "number" ? options.limit : undefined,
+              workerId: typeof options.workerId === "string" ? options.workerId : undefined,
             });
             console.log(JSON.stringify(res, null, 2));
           });
