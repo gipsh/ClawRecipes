@@ -9,7 +9,7 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": "2026.3.24"
+      "pluginApi": "2026.3"
     }
   },
   "publishConfig": {
